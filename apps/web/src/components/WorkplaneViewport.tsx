@@ -139,12 +139,14 @@ type WorkplaneViewportProps = {
   workplaneMode: boolean;
   screwHolePlacement?: { config: ScrewHoleConfig; elevation: number } | null;
   shapePlacement?: ShapeAsset | null;
+  shapeCruiseTargetId?: string | null;
   initialSnap?: GridSize;
   initialWorkspace?: WorkplaneWorkspaceSettings;
   workspaceSettingsKey?: string | null;
   onAddShape: (shape: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotationX?: number; rotation?: number; rotationZ?: number }) => void;
   onPlaceScrewHole?: (point: { x: number; z: number }) => void;
   onPlaceShape?: (shape: ShapeAsset, point: { x: number; z: number; elevation: number; rotationX?: number; rotation?: number; rotationZ?: number }) => void;
+  onPlaceCruise?: () => void;
   onAlignAnchorChange: (id: string) => void;
   onAlignPreview: (axis: AlignAxis, target: AlignTarget) => void;
   onAlignPreviewClear: () => void;
@@ -1544,12 +1546,14 @@ export function WorkplaneViewport({
   workplaneMode,
   screwHolePlacement = null,
   shapePlacement = null,
+  shapeCruiseTargetId = null,
   initialSnap,
   initialWorkspace,
   workspaceSettingsKey,
   onAddShape,
   onPlaceScrewHole,
   onPlaceShape,
+  onPlaceCruise,
   onAlignAnchorChange,
   onAlignPreview,
   onAlignPreviewClear,
@@ -1668,6 +1672,14 @@ export function WorkplaneViewport({
   useEffect(() => {
     rebuildShapePlacementPreview(threeRef.current, shapePlacement, shapePreviewPoint);
   }, [shapePlacement, shapePreviewPoint]);
+
+  useEffect(() => {
+    const state = threeRef.current;
+    if (state) {
+      const visible = !shapePlacement && !shapeCruiseTargetId;
+      setSelectionHelpersVisible(state, visible);
+    }
+  }, [shapePlacement, shapeCruiseTargetId]);
 
   const placementElevationRef = useRef(placementElevation);
   const workplaneModeRef = useRef(workplaneMode);
@@ -2079,7 +2091,7 @@ export function WorkplaneViewport({
   const toPlanePoint = useCallback((clientX: number, clientY: number) => toPlanePointAtY(clientX, clientY, 0), [toPlanePointAtY]);
 
   const resolvePlacementPoint = useCallback(
-    (clientX: number, clientY: number, asset: ShapeAsset) => {
+    (clientX: number, clientY: number, asset: { kind: ShapeAsset["kind"]; height?: number }) => {
       const state = threeRef.current;
       if (!state) return null;
 
@@ -2089,16 +2101,20 @@ export function WorkplaneViewport({
       state.raycaster.setFromCamera(state.pointer, state.camera);
 
       if (workspace.cruiseShapes) {
-        const intersections = state.raycaster.intersectObjects(state.shapeLayer.children, true);
+        // Exclude the cruised shape itself so the raycast doesn't hit it
+        const targets = shapeCruiseTargetId
+          ? state.shapeLayer.children.filter((child) => child.userData.shapeId !== shapeCruiseTargetId)
+          : state.shapeLayer.children;
+        const intersections = state.raycaster.intersectObjects(targets, true);
         const hit = intersections.find((entry) => typeof entry.object.userData.shapeId === "string" && entry.face);
         if (hit && hit.face) {
           const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
           const worldNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
 
           // Calculate height
-          const roundProfile = asset.kind === "sphere" || asset.kind === "torus" || asset.kind === "ring" || asset.kind === "halfSphere";
-          const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text";
-          const height = asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
+          const height = ("height" in asset && typeof asset.height === "number")
+            ? asset.height
+            : (asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : (asset.kind === "torus" || asset.kind === "ring") ? 5 : 20);
 
           // Snap horizontal surfaces
           let x = hit.point.x;
@@ -2138,7 +2154,7 @@ export function WorkplaneViewport({
       }
       return null;
     },
-    [toPlanePoint, workspace.cruiseShapes],
+    [toPlanePoint, workspace.cruiseShapes, shapeCruiseTargetId],
   );
 
   const storeRulerModel = useCallback((next: RulerModel) => {
@@ -2974,6 +2990,12 @@ export function WorkplaneViewport({
         return;
       }
 
+      if (shapeCruiseTargetId) {
+        event.preventDefault();
+        onPlaceCruise?.();
+        return;
+      }
+
       if (rulerModeRef.current) {
         event.preventDefault();
         const candidate = resolveRulerCandidate(event.clientX, event.clientY);
@@ -3221,6 +3243,7 @@ export function WorkplaneViewport({
       modifierActive,
       onPlaceScrewHole,
       onPlaceShape,
+      onPlaceCruise,
       onAlignAnchorChange,
       onInteractionActiveChange,
       onModifierEdgeToggle,
@@ -3236,6 +3259,7 @@ export function WorkplaneViewport({
       setMarqueeFromState,
       screwHolePlacement,
       shapePlacement,
+      shapeCruiseTargetId,
       toPlanePoint,
       toPlanePointAtY,
       toRawPlanePoint,
@@ -3244,6 +3268,14 @@ export function WorkplaneViewport({
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (shapeCruiseTargetId) {
+        const cruisedShape = shapesRef.current.find((s) => s.id === shapeCruiseTargetId);
+        if (cruisedShape) {
+          const point = resolvePlacementPoint(event.clientX, event.clientY, cruisedShape);
+          if (point) onUpdateShape(shapeCruiseTargetId, point);
+        }
+        return;
+      }
       if (shapePlacement) {
         const point = resolvePlacementPoint(event.clientX, event.clientY, shapePlacement);
         if (point) setShapePreviewPoint(point);
@@ -3322,7 +3354,7 @@ export function WorkplaneViewport({
         threeRef.current.needsRender = true;
       }
     },
-    [screwHolePlacement, shapePlacement, resolvePlacementPoint, setMarqueeFromState, toPlanePoint, updateModifierEdgeHover, updateRulerHover, updateTransform],
+    [screwHolePlacement, shapePlacement, shapeCruiseTargetId, resolvePlacementPoint, onUpdateShape, setMarqueeFromState, toPlanePoint, updateModifierEdgeHover, updateRulerHover, updateTransform],
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -3732,7 +3764,7 @@ export function WorkplaneViewport({
         )}
       </div>
 
-      <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${screwHolePlacement ? "screw-hole-placement" : ""} ${shapePlacement ? "shape-placement" : ""} ${rulerMode ? "ruler-mode" : ""} ${rulerDeleteMode ? "ruler-delete-mode" : ""} ${rulerMoveMode ? "ruler-move-mode" : ""} ${modifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
+      <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${screwHolePlacement ? "screw-hole-placement" : ""} ${shapePlacement ? "shape-placement" : ""} ${shapeCruiseTargetId ? "shape-cruise" : ""} ${rulerMode ? "ruler-mode" : ""} ${rulerDeleteMode ? "ruler-delete-mode" : ""} ${rulerMoveMode ? "ruler-move-mode" : ""} ${modifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
         <div className="workplane-plane">
           <div
             className="three-workplane-host"
@@ -3749,7 +3781,7 @@ export function WorkplaneViewport({
             onPointerLeave={handlePointerLeave}
           />
           {marqueeRect ? <div className="selection-marquee" style={marqueeRect} /> : null}
-          {transformOverlay && !alignMode && !mirrorMode && !rulerMode && !rulerDeleteMode && !rulerMoveMode && !modifierActive ? (
+          {transformOverlay && !alignMode && !mirrorMode && !rulerMode && !rulerDeleteMode && !rulerMoveMode && !modifierActive && !shapePlacement && !shapeCruiseTargetId ? (
             <TransformOverlay
               box={transformOverlay}
               measureKey={pinnedMeasureKey ?? hoverMeasureKey}

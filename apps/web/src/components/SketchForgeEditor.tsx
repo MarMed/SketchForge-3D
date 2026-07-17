@@ -23,6 +23,7 @@ import {
   ToolbarChamferIcon,
   ToolbarCaretDownIcon,
   ToolbarCopyIcon,
+  ToolbarCruiseIcon,
   ToolbarDuplicateIcon,
   ToolbarDropToWorkplaneIcon,
   ToolbarExportIcon,
@@ -5036,6 +5037,8 @@ export function SketchForgeEditor({
   const [screwHolePlacementActive, setScrewHolePlacementActive] = useState(false);
   const [screwHolePlacedIds, setScrewHolePlacedIds] = useState<string[]>([]);
   const [shapePlacement, setShapePlacement] = useState<ShapeAsset | null>(null);
+  const [shapeCruiseTargetId, setShapeCruiseTargetId] = useState<string | null>(null);
+  const cruiseBackupRef = useRef<WorkplaneShape | null>(null);
   const [stepExporting, setStepExporting] = useState(false);
   const [alignMode, setAlignMode] = useState(false);
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
@@ -6217,6 +6220,29 @@ export function SketchForgeEditor({
     setNotice(`Screw hole placed on ${screwHoleTarget.name}; its Hole mode is selected for editing`);
   }, [commitShapes, screwHolePlacement, screwHoleTarget, shapes]);
 
+  const toggleCruiseMode = useCallback(() => {
+    if (shapeCruiseTargetId !== null) {
+      setShapeCruiseTargetId(null);
+      cruiseBackupRef.current = null;
+      setNotice("Cruise placement finished");
+    } else {
+      if (selectedIds.length !== 1) return;
+      const id = selectedIds[0];
+      const shape = shapes.find((s) => s.id === id);
+      if (!shape || shape.locked) return;
+      
+      cruiseBackupRef.current = { ...shape };
+      setShapeCruiseTargetId(id);
+      setNotice("Move pointer to cruise; click to place, Esc cancels");
+    }
+  }, [selectedIds, shapeCruiseTargetId, shapes]);
+
+  const placeCruise = useCallback(() => {
+    setShapeCruiseTargetId(null);
+    cruiseBackupRef.current = null;
+    setNotice("Cruise placement finished");
+  }, []);
+
   useEffect(() => {
     if (!screwHolePlacementActive) return;
     const finishOnEscape = (event: KeyboardEvent) => {
@@ -6241,6 +6267,8 @@ export function SketchForgeEditor({
     window.addEventListener("keydown", cancelOnEscape);
     return () => window.removeEventListener("keydown", cancelOnEscape);
   }, [shapePlacement]);
+
+  // useEffect cancelCruiseOnEscape moved below updateShape declaration
 
   const updateShape = useCallback(
     (id: string, patch: ShapeUpdatePatch) => {
@@ -6285,6 +6313,31 @@ export function SketchForgeEditor({
     },
     [commitShapes, selectedIds, shapes],
   );
+
+  useEffect(() => {
+    if (shapeCruiseTargetId === null) return;
+    const cancelCruiseOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (cruiseBackupRef.current) {
+          const backup = cruiseBackupRef.current;
+          updateShape(backup.id, {
+            x: backup.x,
+            z: backup.z,
+            elevation: backup.elevation,
+            rotationX: backup.rotationX,
+            rotation: backup.rotation,
+            rotationZ: backup.rotationZ,
+          });
+        }
+        setShapeCruiseTargetId(null);
+        cruiseBackupRef.current = null;
+        setNotice("Cruise placement cancelled");
+      }
+    };
+    window.addEventListener("keydown", cancelCruiseOnEscape);
+    return () => window.removeEventListener("keydown", cancelCruiseOnEscape);
+  }, [shapeCruiseTargetId, updateShape]);
 
   const deleteSelected = useCallback(() => {
     if (!hasSelection) {
@@ -8165,6 +8218,9 @@ export function SketchForgeEditor({
           setMenuOpen(false);
           setNotice(`Click on the canvas or a face to place ${shape.name}; Esc cancels`);
         }}
+        onCruiseTool={toggleCruiseMode}
+        cruiseActive={shapeCruiseTargetId !== null}
+        canCruise={hasSelection && selectedIds.length === 1}
       />
       <div className="editor-body">
         {toolbarMode === "sketch" && sketchActive ? (
@@ -8219,7 +8275,9 @@ export function SketchForgeEditor({
           workplaneMode={workplaneMode}
           screwHolePlacement={screwHolePlacement}
           shapePlacement={shapePlacement}
+          shapeCruiseTargetId={shapeCruiseTargetId}
           onPlaceShape={placeShape}
+          onPlaceCruise={placeCruise}
           initialSnap={initialSnap}
           initialWorkspace={initialWorkspace}
           workspaceSettingsKey={projectId ?? "local-workplane"}
@@ -8439,6 +8497,9 @@ function SecondaryToolbar({
   onOpenScrewHole,
   onTopPanel,
   onAddShape,
+  onCruiseTool,
+  cruiseActive,
+  canCruise,
 }: {
   toolbarMode: ToolbarMode;
   onToolbarModeChange: (mode: ToolbarMode) => void;
@@ -8490,6 +8551,9 @@ function SecondaryToolbar({
   onOpenScrewHole: () => void;
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
+  onCruiseTool?: () => void;
+  cruiseActive?: boolean;
+  canCruise?: boolean;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
@@ -8534,6 +8598,7 @@ function SecondaryToolbar({
   const arrangeTools = [
     { label: "Workplane", icon: ToolbarWorkplaneIcon, action: onWorkplaneTool, enabled: true, active: workplaneMode },
     { label: "Drop to workplane", icon: ToolbarDropToWorkplaneIcon, action: onDropToWorkplane, enabled: hasSelection },
+    { label: "Cruise", icon: ToolbarCruiseIcon, action: onCruiseTool, enabled: canCruise, active: cruiseActive },
   ];
   const renderToolButton = (tool: (typeof leftTools)[number] | (typeof visibilityTools)[number] | (typeof combineTools)[number] | (typeof modifyTools)[number] | (typeof arrangeTools)[number]) => {
     const { icon: Icon, action, enabled, label } = tool;
