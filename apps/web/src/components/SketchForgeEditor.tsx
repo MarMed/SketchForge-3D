@@ -5035,6 +5035,7 @@ export function SketchForgeEditor({
   const [screwHoleTargetId, setScrewHoleTargetId] = useState<string | null>(null);
   const [screwHolePlacementActive, setScrewHolePlacementActive] = useState(false);
   const [screwHolePlacedIds, setScrewHolePlacedIds] = useState<string[]>([]);
+  const [shapePlacement, setShapePlacement] = useState<ShapeAsset | null>(null);
   const [stepExporting, setStepExporting] = useState(false);
   const [alignMode, setAlignMode] = useState(false);
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
@@ -6138,11 +6139,29 @@ export function SketchForgeEditor({
   }, []);
 
   const addShape = useCallback(
-    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }) => {
+    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotationX?: number; rotation?: number; rotationZ?: number }) => {
       const nextShape = makeShapeFromAsset(asset, point ?? { x: 0, z: 0, elevation: placementElevation });
+      if (point) {
+        if (point.rotationX !== undefined) nextShape.rotationX = point.rotationX;
+        if (point.rotation !== undefined) nextShape.rotation = point.rotation;
+        if (point.rotationZ !== undefined) nextShape.rotationZ = point.rotationZ;
+      }
       commitShapes([...shapes, nextShape], nextShape.id, `${asset.name} added`);
     },
     [commitShapes, placementElevation, shapes],
+  );
+
+  const placeShape = useCallback(
+    (asset: ShapeAsset, point: { x: number; z: number; elevation: number; rotationX?: number; rotation?: number; rotationZ?: number }) => {
+      const nextShape = makeShapeFromAsset(asset, point);
+      if (point.rotationX !== undefined) nextShape.rotationX = point.rotationX;
+      if (point.rotation !== undefined) nextShape.rotation = point.rotation;
+      if (point.rotationZ !== undefined) nextShape.rotationZ = point.rotationZ;
+      commitShapes([...shapes, nextShape], nextShape.id, `${asset.name} placed`);
+      setShapePlacement(null);
+      setNotice(`Placed ${asset.name}`);
+    },
+    [commitShapes, shapes],
   );
 
   const openScrewHolePanel = useCallback(() => {
@@ -6209,6 +6228,19 @@ export function SketchForgeEditor({
     window.addEventListener("keydown", finishOnEscape);
     return () => window.removeEventListener("keydown", finishOnEscape);
   }, [finishScrewHolePlacement, screwHolePlacementActive]);
+
+  useEffect(() => {
+    if (!shapePlacement) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShapePlacement(null);
+        setNotice("Shape placement cancelled");
+      }
+    };
+    window.addEventListener("keydown", cancelOnEscape);
+    return () => window.removeEventListener("keydown", cancelOnEscape);
+  }, [shapePlacement]);
 
   const updateShape = useCallback(
     (id: string, patch: ShapeUpdatePatch) => {
@@ -8128,9 +8160,10 @@ export function SketchForgeEditor({
           setMenuOpen(false);
         }}
         onAddShape={(shape) => {
-          addShape(shape);
+          setShapePlacement(shape);
           setTopPanel(null);
           setMenuOpen(false);
+          setNotice(`Click on the canvas or a face to place ${shape.name}; Esc cancels`);
         }}
       />
       <div className="editor-body">
@@ -8185,6 +8218,8 @@ export function SketchForgeEditor({
           placementElevation={placementElevation}
           workplaneMode={workplaneMode}
           screwHolePlacement={screwHolePlacement}
+          shapePlacement={shapePlacement}
+          onPlaceShape={placeShape}
           initialSnap={initialSnap}
           initialWorkspace={initialWorkspace}
           workspaceSettingsKey={projectId ?? "local-workplane"}
@@ -8557,7 +8592,7 @@ function SecondaryToolbar({
                     className="shape-menu-item"
                     key={shape.id}
                     type="button"
-                    draggable={false}
+                    draggable={true}
                     onClick={() => {
                       if (suppressNextShapeClickRef.current) {
                         suppressNextShapeClickRef.current = false;

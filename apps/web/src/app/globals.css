@@ -2936,7 +2936,9 @@ button {
 .workplane-wrap.placing-workplane .three-workplane-host,
 .workplane-wrap.placing-workplane .three-workplane-host:active,
 .workplane-wrap.screw-hole-placement .three-workplane-host,
-.workplane-wrap.screw-hole-placement .three-workplane-host:active {
+.workplane-wrap.screw-hole-placement .three-workplane-host:active,
+.workplane-wrap.shape-placement .three-workplane-host,
+.workplane-wrap.shape-placement .three-workplane-host:active {
   cursor: crosshair;
 }
 
