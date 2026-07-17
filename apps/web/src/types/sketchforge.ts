@@ -27,7 +27,7 @@ export type ShapeAsset = {
   hole?: boolean;
 };
 
-export type MetricScrewSize = "M2" | "M2.5" | "M3" | "M4" | "M5" | "M6";
+export type MetricScrewSize = "M2" | "M2.5" | "M3" | "M4" | "M5" | "M6" | "M8";
 export type ScrewHeadType = "socket" | "countersunk" | "button" | "pan" | "hex";
 export type ScrewHoleFit = "precise" | "standard" | "loose";
 export type ScrewHoleMount = "clearance" | "heatSet" | "nutTrap";

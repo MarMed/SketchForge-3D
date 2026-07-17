@@ -8,6 +8,11 @@ describe("screw hole generator", () => {
     expect(screwHoleDimensions(m3Socket)).toMatchObject({ shaftDiameter: 3.4, headDiameter: 5.7, recessDepth: 3.1, totalDepth: 20.4, countersunk: false });
   });
 
+  it("uses the expected M8 clearance and socket recess dimensions", () => {
+    const m8Socket: ScrewHoleConfig = { metric: "M8", screwLength: 16, head: "socket", fit: "standard", mount: "clearance", depthMode: "through", depth: 30 };
+    expect(screwHoleDimensions(m8Socket)).toMatchObject({ shaftDiameter: 9.0, headDiameter: 13.5, recessDepth: 8.2, totalDepth: 30, countersunk: false });
+  });
+
   it("creates an editable native Hole cutter made from watertight primitives", () => {
     const hole = createScrewHoleShape(m3Socket, { x: 12, z: -8, elevation: -0.4 }, "test-screw-hole");
     expect(hole).toMatchObject({ id: "test-screw-hole", kind: "mesh", hole: true, x: 12, z: -8, elevation: -0.4, height: 20.4, screwHole: m3Socket });

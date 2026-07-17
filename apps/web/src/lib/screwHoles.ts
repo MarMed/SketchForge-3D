@@ -14,7 +14,7 @@ type MetricScrewSpec = {
   nut: { flats: number; depth: number };
 };
 
-export const METRIC_SCREW_SIZES: MetricScrewSize[] = ["M2", "M2.5", "M3", "M4", "M5", "M6"];
+export const METRIC_SCREW_SIZES: MetricScrewSize[] = ["M2", "M2.5", "M3", "M4", "M5", "M6", "M8"];
 
 export const SCREW_HEAD_OPTIONS: Array<{ value: ScrewHeadType; label: string }> = [
   { value: "socket", label: "Socket / Allen" },
@@ -90,6 +90,16 @@ const SCREW_SPECS: Record<MetricScrewSize, MetricScrewSpec> = {
     hexHead: { flats: 10, depth: 5 },
     heatSet: { diameter: 8, depth: 8 },
     nut: { flats: 10, depth: 5 },
+  },
+  M8: {
+    clearance: { precise: 8.4, standard: 9, loose: 10 },
+    socketHead: { diameter: 13.5, depth: 8.2 },
+    countersunkHead: { diameter: 16, depth: 4.8 },
+    buttonHead: { diameter: 14, depth: 4.4 },
+    panHead: { diameter: 16, depth: 6 },
+    hexHead: { flats: 13, depth: 6.5 },
+    heatSet: { diameter: 9.7, depth: 10 },
+    nut: { flats: 13, depth: 6.5 },
   },
 };
 
