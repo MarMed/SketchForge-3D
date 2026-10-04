@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkplaneWorkspaceSettings } from "@/types/sketchforge";
-import { formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, normalizeScaleForUnits, scaleOptionsForUnits } from "@/lib/measurementUnits";
-import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint, workspaceHydrationSyncDecision } from "@/lib/workplaneSettings";
+import { formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, normalizeScaleForUnits, parseMeasurementInput, scaleOptionsForUnits } from "@/lib/measurementUnits";
+import { canBeginShapeDrag, DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, shapeDimensionLimit, workplaneSettingsFingerprint, workspaceHydrationSyncDecision } from "@/lib/workplaneSettings";
 
 describe("workplane settings helpers", () => {
   it("accepts known snap grid values and falls back for unknown values", () => {
@@ -27,10 +27,12 @@ describe("workplane settings helpers", () => {
           sizePreset: "",
           gridBlockSize: 2.5,
           gridBlockPreset: "Custom",
+          gridColor: "#a34fd1",
           background: "#123456",
           showShadows: false,
           showGrid: false,
           cruiseShapes: false,
+          selectBeforeMove: true,
           zoomSpeed: Infinity,
           units: "Bricks",
           scale: "1:10 (centimeters)",
@@ -43,16 +45,65 @@ describe("workplane settings helpers", () => {
       width: 500,
       gridBlockSize: 2.5,
       gridBlockPreset: "Custom",
+      gridColor: "#a34fd1",
       background: "#123456",
       showShadows: false,
       showGrid: false,
       cruiseShapes: false,
+      selectBeforeMove: true,
       units: "Bricks",
       scale: "1:1 (studs)",
       accuracy: 3,
     });
 
     expect(normalizeWorkspaceSettings({ accuracy: 9 }, fallback).accuracy).toBe(fallback.accuracy);
+    expect(normalizeWorkspaceSettings({ historyLimit: 73 }).historyLimit).toBe(73);
+    expect(normalizeWorkspaceSettings({ historyLimit: 9000 }).historyLimit).toBe(5000);
+    expect(normalizeWorkspaceSettings({ historyLimit: "invalid" }).historyLimit).toBe(100);
+    expect(normalizeWorkspaceSettings({ gridColor: "not-a-color" }).gridColor).toBe(DEFAULT_WORKPLANE_WORKSPACE.gridColor);
+  });
+
+  it("keeps app limits until a shape receives an explicit customization", () => {
+    const untouched = normalizeWorkspaceSettings({});
+    const customized = normalizeWorkspaceSettings({
+      shapeCustomizations: {
+        box: { width: 48, maxDimension: 720 },
+        sphere: { height: Number.NaN, maxDimension: 9000 },
+      },
+    });
+
+    expect(untouched.shapeCustomizations).toEqual({});
+    expect(shapeDimensionLimit(untouched, "box", 160)).toBe(160);
+    expect(customized.shapeCustomizations.box).toEqual({ width: 48, maxDimension: 720 });
+    expect(customized.shapeCustomizations.sphere).toEqual({ maxDimension: 2000 });
+    expect(shapeDimensionLimit(customized, "box", 160)).toBe(720);
+    expect(shapeDimensionLimit(customized, "cylinder", 220)).toBe(220);
+  });
+
+  it("normalizes supported special-shape defaults", () => {
+    const customized = normalizeWorkspaceSettings({
+      shapeCustomizations: {
+        cylinder: { sides: 500 },
+        roundRoof: { sides: 900 },
+        sphere: { steps: 2 },
+        cone: { topRadius: -4, baseRadius: 9000, sides: 40 },
+        text: { text: "A custom label that is much too long", font: "Serif", bevel: 12, segments: 9.6 },
+        gear: { gearType: "helical", teeth: 23.7, toothSize: 3, centerHoleSize: -5, helixAngle: 90, helixQuality: 3 },
+      },
+    });
+
+    expect(customized.shapeCustomizations.cylinder).toEqual({ sides: 500 });
+    expect(customized.shapeCustomizations.roundRoof).toEqual({ sides: 512 });
+    expect(customized.shapeCustomizations.sphere).toEqual({ steps: 6 });
+    expect(customized.shapeCustomizations.cone).toEqual({ topRadius: 0, baseRadius: 1000, sides: 40 });
+    expect(customized.shapeCustomizations.text).toEqual({ text: "A custom label that is m", font: "Serif", bevel: 8, segments: 10 });
+    expect(customized.shapeCustomizations.gear).toEqual({ gearType: "helical", teeth: 24, toothSize: 3, centerHoleSize: 0, helixAngle: 45, helixQuality: 4 });
+  });
+
+  it("can require selection before a shape starts moving", () => {
+    expect(canBeginShapeDrag(false, false)).toBe(true);
+    expect(canBeginShapeDrag(true, false)).toBe(false);
+    expect(canBeginShapeDrag(true, true)).toBe(true);
   });
 
   it("keeps scale options in the selected unit family", () => {
@@ -76,6 +127,14 @@ describe("workplane settings helpers", () => {
     expect(formatMeasurementNumber(20, 1, 0.01)).toBe("20.0");
     expect(formatMeasurementNumber(20, 3, 0.01)).toBe("20.000");
     expect(formatMeasurementNumber(0.0004, 1, 0.001)).toBe("0.0004");
+  });
+
+  it("accepts dot and comma decimal measurement input", () => {
+    expect(parseMeasurementInput("12.5")).toBe(12.5);
+    expect(parseMeasurementInput("12,5")).toBe(12.5);
+    expect(parseMeasurementInput("1.234,5")).toBe(1234.5);
+    expect(parseMeasurementInput("1,234.5")).toBe(1234.5);
+    expect(parseMeasurementInput("not a measurement")).toBeNaN();
   });
 
   it("fingerprints workspace and snap settings together", () => {

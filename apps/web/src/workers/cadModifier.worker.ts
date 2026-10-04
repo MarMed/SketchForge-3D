@@ -2,7 +2,7 @@
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import { CAD_MODIFIER_RUNTIME_BASE } from "@/lib/cadModifierRuntime";
+import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
 
 const HASH_UPPER_BOUND = 2_147_483_647;
 const CAD_EDGE_WIREFRAME_DEFLECTION = 0.035;
@@ -152,6 +152,9 @@ function isIdentityCadTransform(transform: number[]) {
 
 function applyCadTransform(cad: OcctKernel, shape: ShapeHandle, transform: number[] | undefined) {
   if (!isCadTransform(transform) || isIdentityCadTransform(transform)) return shape;
+  if (cadTransformRequiresGeneralTransform(transform)) {
+    return cad.generalTransform(shape, transform);
+  }
   try {
     return cad.transform(shape, transform);
   } catch {
@@ -276,10 +279,6 @@ function isModifierDisplayCadEdge(edge: CollectedCadEdgeGeometry, treatmentAreaL
   return isDisplayCadEdge(edge) && !touchesTreatmentDetailFace(edge, treatmentAreaLimit);
 }
 
-function isSelectableModifierEdge(edge: CollectedCadEdgeGeometry) {
-  return edge.manifold && !edge.boundary && edge.points.length >= 6;
-}
-
 function releaseHandles(cad: OcctKernel, handles: ShapeHandle[]) {
   handles.forEach((handle) => {
     try {
@@ -347,7 +346,7 @@ function collectEdges(cad: OcctKernel, shape: ShapeHandle, sharpAngle: number, s
       return {
         ...edge,
         display,
-        selectable: isSelectableModifierEdge(edge) && (treatmentAreaLimit <= 0 || display),
+        selectable: cadModifierTopologyEdgeIsSelectable(edge),
       };
     });
     const selectableEdgeIds = edges.filter((edge) => edge.selectable && edge.angle + 1e-3 >= sharpAngle).map((edge) => edge.id);
@@ -379,10 +378,6 @@ function copyCadMesh(mesh: { positions: Float32Array; normals: Float32Array; ind
     indices: new Uint32Array(mesh.indices),
     triangleCount: mesh.triangleCount,
   };
-}
-
-function isWasmMemoryFault(message: string) {
-  return /memory access out of bounds|WebAssembly\.RuntimeError|wasm|abort/i.test(message);
 }
 
 function isImportStlWasmFault(message: string) {
@@ -492,7 +487,8 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     }
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error ?? "");
-    if (isWasmMemoryFault(rawMessage) || isImportStlWasmFault(rawMessage) || isMissingValidatorFault(rawMessage)) {
+    const errorName = error instanceof Error ? error.name : "";
+    if (isCadModifierWasmMemoryFault(rawMessage, errorName) || isImportStlWasmFault(rawMessage) || isMissingValidatorFault(rawMessage)) {
       if (cad) releaseSession(cad);
       kernelPromise = null;
       const message = isImportStlWasmFault(rawMessage)

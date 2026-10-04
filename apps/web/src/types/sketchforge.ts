@@ -12,6 +12,7 @@ export type ShapeKind =
   | "halfSphere"
   | "torus"
   | "tube"
+  | "gear"
   | "ring"
   | "wedge"
   | "polygon"
@@ -43,8 +44,45 @@ export type ScrewHoleFeature = {
   depth: number;
 };
 
+export type ProjectAssetSourceFormat = "stl" | "obj" | "svg" | "step";
+
+export type ProjectAsset = {
+  id: string;
+  name: string;
+  mediaType: string;
+  sourceFormat: ProjectAssetSourceFormat;
+  bytes: Uint8Array;
+  byteLength: number;
+  sha256: string;
+};
+
 export type GridSize = "Off" | "0.1 mm" | "0.25 mm" | "0.5 mm" | "1.0 mm" | "2.0 mm" | "5.0 mm" | "Brick";
 export type MeasurementAccuracy = 1 | 2 | 3;
+export type HistoryRetentionLimit = "unlimited" | number;
+
+export type ShapeCustomization = {
+  width?: number;
+  depth?: number;
+  height?: number;
+  maxDimension?: number;
+  steps?: number;
+  sides?: number;
+  bevel?: number;
+  segments?: number;
+  topRadius?: number;
+  baseRadius?: number;
+  teeth?: number;
+  toothSize?: number;
+  toothWidth?: number;
+  centerHoleSize?: number;
+  gearType?: GearType;
+  helixAngle?: number;
+  helixQuality?: number;
+  text?: string;
+  font?: string;
+};
+
+export type ShapeCustomizationMap = Partial<Record<ShapeKind, ShapeCustomization>>;
 
 export type WorkplaneWorkspaceSettings = {
   width: number;
@@ -52,14 +90,18 @@ export type WorkplaneWorkspaceSettings = {
   sizePreset: string;
   gridBlockSize: number;
   gridBlockPreset: string;
+  gridColor: string;
   background: string;
   showShadows: boolean;
   showGrid: boolean;
   cruiseShapes: boolean;
+  selectBeforeMove: boolean;
   zoomSpeed: number;
   units: string;
   scale: string;
   accuracy: MeasurementAccuracy;
+  historyLimit: HistoryRetentionLimit;
+  shapeCustomizations: ShapeCustomizationMap;
 };
 
 export type AlignAxis = "x" | "y" | "z";
@@ -101,12 +143,24 @@ export type SketchImage = {
   depth: number;
   opacity?: number;
   lockAspect?: boolean;
+  locked?: boolean;
 };
 
 export type SketchProfile = {
   points: SketchPoint[];
   segments: SketchSegment[];
   images?: SketchImage[];
+};
+
+export type SketchOperation = "extrude" | "revolve";
+
+export type GearType = "spur" | "helical" | "bevel";
+
+export type SketchRevolveSettings = {
+  startAngle: number;
+  sweepAngle: number;
+  sides: number;
+  quality: number;
 };
 
 export type EdgeTreatmentFeature = {
@@ -185,6 +239,20 @@ export type WorkplaneShape = {
   segments?: number;
   topRadius?: number;
   baseRadius?: number;
+  taperTopWidth?: number;
+  taperTopDepth?: number;
+  taperBottomWidth?: number;
+  taperBottomDepth?: number;
+  /** Legacy local-dev taper fields kept for compatibility with in-progress projects. */
+  taperTopScale?: number;
+  taperBottomScale?: number;
+  teeth?: number;
+  toothSize?: number;
+  toothWidth?: number;
+  centerHoleSize?: number;
+  gearType?: GearType;
+  helixAngle?: number;
+  helixQuality?: number;
   text?: string;
   font?: string;
   importedMesh?: {
@@ -195,6 +263,12 @@ export type WorkplaneShape = {
     baseHeight: number;
     triangleCount: number;
     sourceFormat: "stl" | "obj" | "svg" | "json" | "step";
+    // IndexedDB persistence uses this only in compact stored shape records.
+    // Runtime editor shapes are hydrated with the full immutable mesh resource.
+    storageResourceId?: string;
+    // Stable reference to the original imported file in the project's shared
+    // asset table. Copies and grouped operands reuse this reference.
+    assetId?: string;
     // Exact OpenCascade B-Rep of the body (single-shape STEP text) in the same
     // local frame as `positions`. Set only for STEP imports; lets the exporter
     // re-emit the original analytic geometry instead of the tessellation.
@@ -207,6 +281,8 @@ export type WorkplaneShape = {
     pixelHeight: number;
   };
   sketchProfile?: SketchProfile;
+  sketchOperation?: SketchOperation;
+  sketchRevolve?: SketchRevolveSettings;
   edgeTreatments?: EdgeTreatmentFeature[];
   edgeTreatmentHistory?: EdgeTreatmentHistoryEntry[];
   cadDisplayEdges?: CadDisplayEdge[];
@@ -219,8 +295,7 @@ export type WorkplaneShape = {
   groupedBaseWidth?: number;
   groupedBaseDepth?: number;
   groupedBaseHeight?: number;
-  // Preserves the preset behind generated manufacturing cutters so the UI can
-  // describe the hole after it has been placed or restored from a project.
+  groupOperation?: "group" | "intersection";
   screwHole?: ScrewHoleFeature;
   locked?: boolean;
   hidden?: boolean;

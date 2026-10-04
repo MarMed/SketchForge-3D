@@ -7,13 +7,24 @@ import {
 } from "@/components/workplane/transformOverlayTypes";
 
 export {
+  continuousSnappedWheelRotation,
   getElevationMeasureKey,
+  isPointInsideTransformBounds,
   measureKeyForHandle,
+  normalizedRotationPlaneBasis,
+  rotationPlaneDirectionSign,
+  transformBoundsIntersectClipVolume,
+  transformOverlayScreenPoint,
+  snappedRotationDelta,
+  snappedWheelRotation,
+  ROTATION_WHEEL_SHIFT_SNAP_DEGREES,
+  ROTATION_WHEEL_SNAP_DEGREES,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
   type PinnedRotationWheelView,
   type RotationAxis,
+  type RotationPlaneBasis,
   type RotationPlaneView,
   type RotationReadout,
   type RotationWheelView,
@@ -32,6 +43,8 @@ export function TransformOverlay({
   hideDimensionMarks,
   rotationWheelAxis,
   pinnedRotationWheelView,
+  onBeginCameraDrag,
+  onCameraWheel,
   onBeginTransform,
   onMoveTransform,
   onFinishTransform,
@@ -66,7 +79,9 @@ export function TransformOverlay({
     };
   });
   const activeAngle = rotationReadout?.angle ?? 0;
-  const activeRadians = THREE.MathUtils.degToRad(activeAngle - 90);
+  const activeRadians = rotationReadout?.pointerAngle === undefined
+    ? THREE.MathUtils.degToRad(activeAngle - 90)
+    : THREE.MathUtils.degToRad(rotationReadout.pointerAngle);
   const activeLine = {
     x: Math.cos(activeRadians) * 92,
     y: Math.sin(activeRadians) * 92,
@@ -75,13 +90,32 @@ export function TransformOverlay({
   const plane = pinnedWheel?.plane ?? box.rotationPlanes[rotationWheelAxis];
   const wheel = pinnedWheel?.wheel ?? box.rotationWheels[rotationWheelAxis] ?? box.rotationWheel;
   return (
-    <div className={`transform-overlay ${hideSelectionChrome ? "hide-selection-chrome" : ""}`} aria-hidden="true">
+    <div
+      className={`transform-overlay ${hideSelectionChrome ? "hide-selection-chrome" : ""}`}
+      onPointerDownCapture={(event) => {
+        if (event.button === 1 || event.button === 2) {
+          onHoverMeasure(null);
+          onPinMeasure(null);
+          onBeginCameraDrag(event);
+        }
+      }}
+      onWheelCapture={onCameraWheel}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
       {showRotationWheel && wheel && plane ? (
         <svg
           className={`rotation-protractor-plane axis-${rotationWheelAxis}`}
+          aria-hidden="true"
           viewBox={`0 0 ${box.width} ${box.height}`}
           preserveAspectRatio="none"
-          onPointerDown={(event) => onBeginTransform("rotate", `rotate-wheel-${rotationWheelAxis}`, event)}
+          onPointerDown={(event) => {
+            if (event.button === 0) {
+              onBeginTransform("rotate", `rotate-wheel-${rotationWheelAxis}`, event);
+            }
+          }}
           onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
           onPointerUp={onFinishTransform}
           onPointerCancel={onFinishTransform}
@@ -107,7 +141,7 @@ export function TransformOverlay({
           </g>
         </svg>
       ) : null}
-      <svg className="transform-guides" viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none">
+      <svg className="transform-guides" viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <marker id="dimension-arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto" markerUnits="strokeWidth">
             <path d="M0 4 L8 0 L5.2 4 L8 8 Z" />
@@ -142,6 +176,7 @@ export function TransformOverlay({
           style={{ "--overlay-x": `${editingDimension.x}px`, "--overlay-y": `${editingDimension.y}px` } as CSSProperties}
           value={editingDimension.value}
           autoFocus
+          inputMode="decimal"
           onPointerDown={(event) => event.stopPropagation()}
           onChange={(event) => onEditingDimensionChange(event.target.value)}
           onBlur={onCommitDimensionEdit}
@@ -180,11 +215,24 @@ export function TransformOverlay({
         <button
           key={handle.key}
           className={`transform-handle ${handle.className}`}
-          style={{ "--overlay-x": `${handle.x}px`, "--overlay-y": `${handle.y}px` } as CSSProperties}
+          style={{
+            "--overlay-x": `${handle.x}px`,
+            "--overlay-y": `${handle.y}px`,
+            "--transform-handle-angle": `${handle.angle ?? 0}deg`,
+          } as CSSProperties}
           title={handle.title}
-          onPointerEnter={() => onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle))}
+          onPointerEnter={(event) => {
+            if ((event.buttons & 4) !== 0) {
+              onHoverMeasure(null);
+              return;
+            }
+            onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle));
+          }}
           onPointerLeave={() => onHoverMeasure(null)}
           onPointerDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
             onPinMeasure(handleMeasureKey(handle));
             onBeginTransform(handle.kind, handle.key, event);
           }}
@@ -203,9 +251,20 @@ export function TransformOverlay({
         <button
           key={handle.key}
           className={`rotate-handle ${handle.className}`}
-          style={{ "--overlay-x": `${handle.x}px`, "--overlay-y": `${handle.y}px`, "--rotate-handle-angle": `${handle.angle}deg` } as CSSProperties}
+          style={{
+            "--overlay-x": `${handle.x}px`,
+            "--overlay-y": `${handle.y}px`,
+            "--rotate-plane-a": handle.plane.a,
+            "--rotate-plane-b": handle.plane.b,
+            "--rotate-plane-c": handle.plane.c,
+            "--rotate-plane-d": handle.plane.d,
+          } as CSSProperties}
           title="Rotate"
-          onPointerDown={(event) => onBeginTransform("rotate", handle.key, event)}
+          onPointerDown={(event) => {
+            if (event.button === 0) {
+              onBeginTransform("rotate", handle.key, event);
+            }
+          }}
           onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
           onPointerUp={onFinishTransform}
           onPointerCancel={onFinishTransform}

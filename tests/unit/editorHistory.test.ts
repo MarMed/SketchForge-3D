@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendEditorHistorySnapshot, boundedEditorHistory, editorHistoryEntry, hydrateEditorHistoryState, projectShapesFingerprint } from "@/lib/editorHistory";
+import { appendEditorHistorySnapshot, boundedEditorHistory, editorHistoryEntry, editorHistoryForExport, hydrateEditorHistoryState, immutableResourceFingerprint, projectShapesFingerprint } from "@/lib/editorHistory";
 import type { WorkplaneShape } from "@/types/sketchforge";
 
 function box(overrides: Partial<WorkplaneShape> = {}): WorkplaneShape {
@@ -61,17 +61,109 @@ describe("editor history snapshots", () => {
     expect(projectShapesFingerprint([changed])).not.toBe(projectShapesFingerprint([shape]));
   });
 
-  it("bounds entry count and estimated memory while retaining undo depth", () => {
+  it("reuses an immutable mesh signature for transform-only history snapshots", () => {
+    let coordinateReads = 0;
+    const positions = new Proxy([0, 0, 0, 1, 0, 0, 0, 1, 0], {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) coordinateReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const shape = box({
+      kind: "mesh",
+      importedMesh: {
+        positions,
+        baseWidth: 1,
+        baseDepth: 1,
+        baseHeight: 1,
+        triangleCount: 1,
+        sourceFormat: "stl",
+      },
+    });
+
+    const baseline = projectShapesFingerprint([shape]);
+    expect(coordinateReads).toBeGreaterThan(0);
+    coordinateReads = 0;
+
+    expect(projectShapesFingerprint([{ ...shape, x: 25 }])).not.toBe(baseline);
+    expect(coordinateReads).toBe(0);
+    expect(projectShapesFingerprint([{
+      ...shape,
+      importedMesh: { ...shape.importedMesh!, positions: [...positions] },
+    }])).toBe(baseline);
+  });
+
+  it("stream-hashes large mesh arrays and detects changes at the end", () => {
+    const positions = Array.from({ length: 10_001 }, (_, index) => Math.fround(Math.sin(index) * 100));
+    const resource = {
+      positions,
+      normals: positions.map((value) => Math.fround(value / 100)),
+      baseWidth: 200,
+      baseDepth: 150,
+      baseHeight: 80,
+      triangleCount: Math.floor(positions.length / 9),
+      sourceFormat: "stl",
+    };
+    const changedPositions = [...positions];
+    changedPositions[changedPositions.length - 1] += 1;
+
+    expect(immutableResourceFingerprint({ ...resource, positions: [...positions], normals: [...resource.normals] }))
+      .toBe(immutableResourceFingerprint(resource));
+    expect(immutableResourceFingerprint({ ...resource, positions: changedPositions }))
+      .not.toBe(immutableResourceFingerprint(resource));
+  });
+
+  it("reuses geometry signatures inside newly restored edge-treatment history wrappers", () => {
+    let coordinateReads = 0;
+    const points = new Proxy([0, 0, 0, 1, 2, 3], {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) coordinateReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const before = box({ cadDisplayEdges: [{ points }] });
+    const entry = { id: "fillet-before", createdAt: 123, feature: { kind: "fillet" as const, amount: 1, edgeCount: 1 }, before };
+    const baseline = projectShapesFingerprint([box({ edgeTreatmentHistory: [entry] })]);
+    expect(coordinateReads).toBeGreaterThan(0);
+    coordinateReads = 0;
+    expect(projectShapesFingerprint([box({ edgeTreatmentHistory: [{ ...entry, before: { ...before } }] })])).toBe(baseline);
+    expect(coordinateReads).toBe(0);
+    expect(projectShapesFingerprint([box({ edgeTreatmentHistory: [{ ...entry, before: { ...before, x: 5 } }] })])).not.toBe(baseline);
+  });
+
+  it("preserves normalized reversible-history references across transform snapshots", () => {
+    const original = editorHistoryEntry([box({ edgeTreatmentHistory: [{
+      id: "edge-before", createdAt: 123, feature: { kind: "fillet", amount: 1, edgeCount: 1 }, before: box(),
+    }] })], []);
+    const moved = editorHistoryEntry([{ ...original.shapes[0], x: 5 }], []);
+    expect(moved.shapes[0].edgeTreatmentHistory).toBe(original.shapes[0].edgeTreatmentHistory);
+  });
+
+  it("falls back to direct field hashing when serialization exceeds the string limit", () => {
+    const resource = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      toJSON() {
+        throw new RangeError("Invalid string length");
+      },
+    };
+
+    expect(immutableResourceFingerprint(resource)).toMatch(/^stream-v1:/);
+  });
+
+  it("keeps unlimited history and applies preset or custom action limits", () => {
     const entries = Array.from({ length: 140 }, (_, index) => ({
       ...editorHistoryEntry([box({ id: `box-${index}`, x: index })], []),
       estimatedBytes: 2 * 1024 * 1024,
     }));
-    const bounded = boundedEditorHistory(entries);
+    const unlimited = boundedEditorHistory(entries);
+    const lastThirty = boundedEditorHistory(entries, 30);
+    const custom = boundedEditorHistory(entries, 7);
 
-    expect(bounded.length).toBeLessThanOrEqual(100);
-    expect(bounded.length).toBeGreaterThanOrEqual(2);
-    expect(bounded.reduce((total, entry) => total + entry.estimatedBytes, 0)).toBeLessThanOrEqual(64 * 1024 * 1024);
-    expect(bounded.at(-1)?.shapes[0].id).toBe("box-139");
+    expect(unlimited).toHaveLength(140);
+    expect(lastThirty).toHaveLength(31);
+    expect(lastThirty[0].shapes[0].id).toBe("box-109");
+    expect(custom).toHaveLength(8);
+    expect(custom.at(-1)?.shapes[0].id).toBe("box-139");
   });
 
   it("trims redo only for a real new edit and preserves it for a no-op", () => {
@@ -99,6 +191,16 @@ describe("editor history snapshots", () => {
     expect(restored.entries[2].shapes[0].x).toBe(10);
   });
 
+  it("restores only the configured number of saved actions without losing the active state", () => {
+    const entries = Array.from({ length: 80 }, (_, x) => editorHistoryEntry([box({ x })], []));
+    const restored = hydrateEditorHistoryState([box({ x: 60 })], entries, 60, 30);
+
+    expect(restored.entries).toHaveLength(31);
+    expect(restored.index).toBe(30);
+    expect(restored.entries[0].shapes[0].x).toBe(30);
+    expect(restored.entries[restored.index].shapes[0].x).toBe(60);
+  });
+
   it("falls back to the loaded scene when persisted history is stale", () => {
     const stale = [editorHistoryEntry([box({ x: 1 })], [])];
     const restored = hydrateEditorHistoryState([box({ x: 9 })], stale, 0);
@@ -106,5 +208,19 @@ describe("editor history snapshots", () => {
     expect(restored.index).toBe(0);
     expect(restored.entries).toHaveLength(1);
     expect(restored.entries[0].shapes[0].x).toBe(9);
+  });
+
+  it("selects all history or the requested number of recent undo actions for project export", () => {
+    const entries = Array.from({ length: 140 }, (_, x) => editorHistoryEntry([box({ x })], []));
+
+    const unlimited = editorHistoryForExport(entries, 120, "unlimited");
+    expect(unlimited.entries).toBe(entries);
+    expect(unlimited.index).toBe(120);
+
+    const lastThirty = editorHistoryForExport(entries, 120, 30);
+    expect(lastThirty.entries).toHaveLength(31);
+    expect(lastThirty.index).toBe(30);
+    expect(lastThirty.entries[0].shapes[0].x).toBe(90);
+    expect(lastThirty.entries[30].shapes[0].x).toBe(120);
   });
 });
